@@ -70,3 +70,10 @@ copy_res_l:
 
 # Parallel build (add -jN option to run with N jobs)
 .PHONY: all copy_res_m copy_res_w
+
+.PHONY: all copy_res_m copy_res_w copy_lib_m copy_lib_w copy_lib_l copy_res_l clean
+
+clean:
+	@if exist $(workspaceFolder)\bin\*.o del /Q $(workspaceFolder)\bin\*.o
+	@if exist $(workspaceFolder)\bin\main.exe del /Q $(workspaceFolder)\bin\main.exe
+	@if exist $(workspaceFolder)\bin\main del /Q $(workspaceFolder)\bin\main
