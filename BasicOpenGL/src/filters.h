@@ -1,53 +1,62 @@
 #ifndef FILTERS_H
 #define FILTERS_H
 
-#include <iostream>
 #include <vector>
 #include <string>
 #include <stb/stb_image.h>
 #include <stb/stb_image_write.h>
 
-// Image processing variables (size and channels)
- extern int width, height, channels;
+// A very simple image structure: flat array + dimensions
+struct Image {
+    int width  = 0;
+    int height = 0;
+    int channels = 0;          // usually 3 (RGB) or 4 (RGBA)
+    std::vector<unsigned char> data;
 
-// Function declarations
-std::vector<std::vector<std::vector<unsigned char>>> LoadImageToArray(const std::string& filePath);
+    // Access helpers
+    unsigned char& at(int x, int y, int c) {
+        return data[(y * width + x) * channels + c];
+    }
+    unsigned char at(int x, int y, int c) const {
+        return data[(y * width + x) * channels + c];
+    }
+};
 
-// gray scale
-void ConvertToGrayscale(std::vector<std::vector<std::vector<unsigned char>>>& imageArray);
-void ConvertToGrayAveragescale(std::vector<std::vector<std::vector<unsigned char>>>& imageArray); 
+// --------- Load / Save ---------
 
+// Load PNG (or other stb-supported image) from disk into Image
+Image loadImage(const std::string& filePath);
 
-//  GaussianFilters
-void ApplyGaussianFilter3x3(std::vector<std::vector<std::vector<unsigned char>>>& imageArray, int width, int height); 
-void ApplyGaussianFilter5x5(std::vector<std::vector<std::vector<unsigned char>>>& imageArray, int width, int height);
+// Save Image as PNG file
+void saveImage(const Image& img, const std::string& filePath);
 
+// Save first channel of image to a text file:
+//   - grayscaleLevels = 2  -> numbers 0..1 (black/white)
+//   - grayscaleLevels = 16 -> numbers 0..15 (16 gray levels)
+void saveImageAsText(const Image& img,
+                     const std::string& filePath,
+                     int grayscaleLevels);
 
+// --------- Basic operations ---------
 
-// canny edge detection 
-void GradientCalculation(std::vector<std::vector<std::vector<unsigned char>>>& imageArray, int width, int height); 
-void NonMaxSuppression(std::vector<std::vector<std::vector<unsigned char>>>& imageArray, int width, int height)  ; 
-void DoubleThresholdAndHysteresis(std::vector<std::vector<std::vector<unsigned char>>>& imageArray, int width, int height, int lowThreshold, int highThreshold) ; 
-void HysteresisThresholding(std::vector<std::vector<std::vector<unsigned char>>>& imageArray,int width, int height, float t1, float t2);
-                            
+// Convert RGB image to grayscale using luminance formula
+// (0.3 R + 0.59 G + 0.11 B)
+void toGrayscale(Image& img);
 
+// --------- Assignment filters ---------
 
+// 1. Grayscale (just use toGrayscale + save)
 
+// 2. Canny edge detection (on grayscale image)
+// lowRatio, highRatio in [0,1], e.g. 0.1 and 0.9
+Image cannyEdges(Image gray,
+                 float lowRatio,
+                 float highRatio);
 
+// 3. Halftone: each pixel -> 2x2 black/white block
+Image halftone(const Image& gray);
 
-//Halftone
-std::vector<std::vector<std::vector<unsigned char>>> Halftone(
-    const std::vector<std::vector<std::vector<unsigned char>>>& image) ; 
+// 4. Floyd–Steinberg dithering (16 gray levels) on grayscale
+void floydSteinberg16(Image& gray);
 
-//  FloyedSteinberg    
-void floydSteinbergDither(std::vector<std::vector<std::vector<unsigned char>>>& image) ; 
-
-
-
-void SaveImage(const std::vector<std::vector<std::vector<unsigned char>>>& imageArray, const std::string& imageName, const std::string& outputDirectory) ; 
-
-
-
-
-
-#endif 
+#endif // FILTERS_H
