@@ -1,48 +1,79 @@
 #include "filters.h"
 
 #include <cmath>
-#include <iostream>
 #include <fstream>
+#include <iostream>
 
 template<typename T>
-T clamp(T v, T lo, T hi) {
+static T clamp(T v, T lo, T hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
     return v;
 }
 
-// ----------------- I/O ------------------
+// -------------------- I/O --------------------
 
-Image loadImage(const std::string& filePath) {
-    Image img;
-    int w, h, ch;
-    unsigned char* buffer = stbi_load(filePath.c_str(), &w, &h, &ch, 0);
+Image loadImageTo3D(const std::string& filePath,
+                    int& width,
+                    int& height,
+                    int& channels) {
+    unsigned char* buffer = stbi_load(filePath.c_str(),
+                                      &width,
+                                      &height,
+                                      &channels,
+                                      0);
     if (!buffer) {
         std::cerr << "Failed to load image: " << filePath << "\n";
         std::exit(EXIT_FAILURE);
     }
 
-    img.width = w;
-    img.height = h;
-    img.channels = ch;
-    img.data.assign(buffer, buffer + (w * h * ch));
+    Image img(height,
+              std::vector<std::vector<unsigned char>>(
+                  width,
+                  std::vector<unsigned char>(channels, 0)));
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int idx = (y * width + x) * channels;
+            for (int c = 0; c < channels; ++c) {
+                img[y][x][c] = buffer[idx + c];
+            }
+        }
+    }
 
     stbi_image_free(buffer);
     return img;
 }
 
-void saveImage(const Image& img, const std::string& filePath) {
-    if (img.data.empty()) {
-        std::cerr << "Image is empty, not saving.\n";
-        return;
-    }
+void save3DImage(const Image& img,
+                 const std::string& filePath) {
+    int height = static_cast<int>(img.size());
+    int width  = static_cast<int>(img[0].size());
+    int ch     = static_cast<int>(img[0][0].size());
 
-    int stride = img.width * img.channels;
+    std::vector<unsigned char> buffer(width * height * ch);
+
+    for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+        int idx = (y * width + x) * ch;
+        for (int c = 0; c < ch; ++c) {
+            if (ch == 4 && c == 3) {
+                // force alpha channel to opaque
+                buffer[idx + c] = 255;
+            } else {
+                buffer[idx + c] = img[y][x][c];
+            }
+        }
+    }
+}
+
+
+    int stride = width * ch;
     int ok = stbi_write_png(filePath.c_str(),
-                            img.width,
-                            img.height,
-                            img.channels,
-                            img.data.data(),
+                            width,
+                            height,
+                            ch,
+                            buffer.data(),
                             stride);
     if (!ok) {
         std::cerr << "Failed to save image: " << filePath << "\n";
@@ -51,104 +82,137 @@ void saveImage(const Image& img, const std::string& filePath) {
     }
 }
 
- 
+// Save grayscale channel as comma-separated text
+void save3DImageAsText(const Image& img,
+                       const std::string& filePath,
+                       int levels) {
+    int height = static_cast<int>(img.size());
+    int width  = static_cast<int>(img[0].size());
 
-// ------------- basic grayscale -----------
-
-void toGrayscale(Image& img) {
-    if (img.channels < 3) {
-        // already gray (1 channel) or similar
+    std::ofstream out(filePath);
+    if (!out) {
+        std::cerr << "Failed to open " << filePath << " for writing\n";
         return;
     }
 
-    for (int y = 0; y < img.height; ++y) {
-        for (int x = 0; x < img.width; ++x) {
-            unsigned char r = img.at(x, y, 0);
-            unsigned char g = img.at(x, y, 1);
-            unsigned char b = img.at(x, y, 2);
+    bool first = true;
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            unsigned char g = img[y][x][0]; // first channel
+            int value = static_cast<int>(
+                std::round((g / 255.0) * (levels - 1))
+            );
+
+            if (!first) out << ",";
+            first = false;
+            out << value;
+        }
+    }
+
+    std::cout << "Saved text data: " << filePath << "\n";
+}
+
+// ---------------- Grayscale ----------------
+
+void makeGrayscale(Image& img,
+                   int width,
+                   int height) {
+    int channels = static_cast<int>(img[0][0].size());
+    if (channels < 3) return;
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            unsigned char r = img[y][x][0];
+            unsigned char g = img[y][x][1];
+            unsigned char b = img[y][x][2];
 
             unsigned char gray =
                 static_cast<unsigned char>(0.3 * r + 0.59 * g + 0.11 * b);
 
-            img.at(x, y, 0) = gray;
-            if (img.channels > 1) img.at(x, y, 1) = gray;
-            if (img.channels > 2) img.at(x, y, 2) = gray;
+            img[y][x][0] = gray;
+            if (channels > 1) img[y][x][1] = gray;
+            if (channels > 2) img[y][x][2] = gray;
         }
     }
 }
 
-// ------------- small Gaussian blur (3x3) -------------
-// Standard 3x3 Gaussian kernel (sigma ~1) :contentReference[oaicite:1]{index=1}
-static void gaussianBlur3x3(Image& img) {
+// -------------- helper: Gaussian blur 3x3 --------------
+
+static void gaussianBlur3x3(Image& img,
+                            int width,
+                            int height) {
     const float k[3][3] = {
         {1.f/16, 2.f/16, 1.f/16},
         {2.f/16, 4.f/16, 2.f/16},
         {1.f/16, 2.f/16, 1.f/16}
     };
 
-    Image out = img; // same size/channels
+    int channels = static_cast<int>(img[0][0].size());
+    Image out = img;
 
-    for (int y = 1; y < img.height - 1; ++y) {
-        for (int x = 1; x < img.width - 1; ++x) {
-
+    for (int y = 1; y < height - 1; ++y) {
+        for (int x = 1; x < width - 1; ++x) {
             float sum = 0.0f;
 
             for (int ky = -1; ky <= 1; ++ky) {
                 for (int kx = -1; kx <= 1; ++kx) {
-                    unsigned char v = img.at(x + kx, y + ky, 0);
+                    unsigned char v = img[y + ky][x + kx][0];
                     sum += k[ky + 1][kx + 1] * v;
                 }
             }
 
-            unsigned char g = static_cast<unsigned char>(clamp(sum, 0.f, 255.f));
+            unsigned char gray =
+                static_cast<unsigned char>(clamp(sum, 0.f, 255.f));
 
-            out.at(x, y, 0) = g;
-            if (out.channels > 1) out.at(x, y, 1) = g;
-            if (out.channels > 2) out.at(x, y, 2) = g;
+            out[y][x][0] = gray;
+            if (channels > 1) out[y][x][1] = gray;
+            if (channels > 2) out[y][x][2] = gray;
         }
     }
 
     img = out;
 }
 
-// ---------------- Canny edges ----------------
-//
-// Algorithm: Gaussian -> Sobel -> NMS -> double threshold -> hysteresis. :contentReference[oaicite:2]{index=2}
-Image cannyEdges(Image gray, float lowRatio, float highRatio) {
-    toGrayscale(gray);         // make sure it's gray
+// -------------- Canny edge detection --------------
 
-    // 1. Noise reduction
-    gaussianBlur3x3(gray);
+Image applyCanny(const Image& grayInput,
+                 int width,
+                 int height,
+                 float lowRatio,
+                 float highRatio) {
+    // Step 0: ensure grayscale + blur
+    Image img = grayInput;
+    makeGrayscale(img, width, height);
+    gaussianBlur3x3(img, width, height);
 
-    int w = gray.width;
-    int h = gray.height;
-    int N = w * h;
+    int channels = static_cast<int>(img[0][0].size());
+    int N = width * height;
 
-    // 2. Gradient (Sobel) and direction
+    // 1. gradient magnitude + direction (Sobel)
     std::vector<float> mag(N, 0.0f);
-    std::vector<float> dir(N, 0.0f); // angle in degrees (0,45,90,135)
+    std::vector<float> dir(N, 0.0f);
 
-    const int gxKernel[3][3] = {
+    const int gxK[3][3] = {
         { -1, 0, 1 },
         { -2, 0, 2 },
         { -1, 0, 1 }
     };
-    const int gyKernel[3][3] = {
+    const int gyK[3][3] = {
         {  1,  2,  1 },
         {  0,  0,  0 },
         { -1, -2, -1 }
     };
 
-    for (int y = 1; y < h - 1; ++y) {
-        for (int x = 1; x < w - 1; ++x) {
+    for (int y = 1; y < height - 1; ++y) {
+        for (int x = 1; x < width - 1; ++x) {
             float gx = 0.0f;
             float gy = 0.0f;
 
             for (int ky = -1; ky <= 1; ++ky) {
                 for (int kx = -1; kx <= 1; ++kx) {
-                    unsigned char v = gray.at(x + kx, y + ky, 0);
-                    gx += gxKernel[ky + 1][kx + 1] * v;
-                    gy += gyKernel[ky + 1][kx + 1] * v;
+                    unsigned char v = img[y + ky][x + kx][0];
+                    gx += gxK[ky + 1][kx + 1] * v;
+                    gy += gyK[ky + 1][kx + 1] * v;
                 }
             }
 
@@ -166,75 +230,72 @@ Image cannyEdges(Image gray, float lowRatio, float highRatio) {
             else
                 q = 135;
 
-            int idx = y * w + x;
+            int idx = y * width + x;
             mag[idx] = m;
             dir[idx] = q;
         }
     }
 
-    // 3. Non-maximum suppression
+    // 2. Non-maximum suppression
     std::vector<float> nms(N, 0.0f);
 
-    for (int y = 1; y < h - 1; ++y) {
-        for (int x = 1; x < w - 1; ++x) {
-            int idx = y * w + x;
+    for (int y = 1; y < height - 1; ++y) {
+        for (int x = 1; x < width - 1; ++x) {
+            int idx = y * width + x;
             float m = mag[idx];
             float d = dir[idx];
 
             float m1 = 0.0f, m2 = 0.0f;
 
             if (d == 0) {
-                m1 = mag[y * w + (x - 1)];
-                m2 = mag[y * w + (x + 1)];
+                m1 = mag[y * width + (x - 1)];
+                m2 = mag[y * width + (x + 1)];
             } else if (d == 45) {
-                m1 = mag[(y - 1) * w + (x + 1)];
-                m2 = mag[(y + 1) * w + (x - 1)];
+                m1 = mag[(y - 1) * width + (x + 1)];
+                m2 = mag[(y + 1) * width + (x - 1)];
             } else if (d == 90) {
-                m1 = mag[(y - 1) * w + x];
-                m2 = mag[(y + 1) * w + x];
+                m1 = mag[(y - 1) * width + x];
+                m2 = mag[(y + 1) * width + x];
             } else { // 135
-                m1 = mag[(y - 1) * w + (x - 1)];
-                m2 = mag[(y + 1) * w + (x + 1)];
+                m1 = mag[(y - 1) * width + (x - 1)];
+                m2 = mag[(y + 1) * width + (x + 1)];
             }
 
-            if (m >= m1 && m >= m2) {
+            if (m >= m1 && m >= m2)
                 nms[idx] = m;
-            } else {
+            else
                 nms[idx] = 0.0f;
-            }
         }
     }
 
-    // 4. Double threshold + hysteresis
+    // 3. Double threshold
     float maxMag = 0.0f;
-    for (float val : nms) {
-        if (val > maxMag) maxMag = val;
-    }
+    for (float v : nms)
+        if (v > maxMag) maxMag = v;
 
     float high = highRatio * maxMag;
-    float low  = lowRatio  * maxMag;
+    float low  = lowRatio * maxMag;
 
     enum EdgeType { NONE = 0, WEAK = 1, STRONG = 2 };
-    std::vector<int> edges(N, 0);
+    std::vector<int> edges(N, NONE);
 
     for (int i = 0; i < N; ++i) {
         if (nms[i] >= high)
             edges[i] = STRONG;
         else if (nms[i] >= low)
             edges[i] = WEAK;
-        else
-            edges[i] = NONE;
     }
 
-    for (int y = 1; y < h - 1; ++y) {
-        for (int x = 1; x < w - 1; ++x) {
-            int idx = y * w + x;
+    // 4. Hysteresis (keep WEAK that touch STRONG)
+    for (int y = 1; y < height - 1; ++y) {
+        for (int x = 1; x < width - 1; ++x) {
+            int idx = y * width + x;
             if (edges[idx] != WEAK) continue;
 
             bool connected = false;
             for (int dy = -1; dy <= 1 && !connected; ++dy) {
                 for (int dx = -1; dx <= 1; ++dx) {
-                    int ni = (y + dy) * w + (x + dx);
+                    int ni = (y + dy) * width + (x + dx);
                     if (edges[ni] == STRONG) {
                         connected = true;
                         break;
@@ -245,18 +306,18 @@ Image cannyEdges(Image gray, float lowRatio, float highRatio) {
         }
     }
 
-    Image out;
-    out.width = w;
-    out.height = h;
-    out.channels = gray.channels;
-    out.data.assign(w * h * out.channels, 0);
+    // Build output image: 255 for edges, 0 otherwise
+    Image out(height,
+              std::vector<std::vector<unsigned char>>(
+                  width,
+                  std::vector<unsigned char>(channels, 0)));
 
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            int idx = y * w + x;
-            unsigned char value = (edges[idx] == STRONG) ? 255 : 0;
-            for (int c = 0; c < out.channels && c < 3; ++c) {
-                out.at(x, y, c) = value;
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int idx = y * width + x;
+            unsigned char v = (edges[idx] == STRONG) ? 255 : 0;
+            for (int c = 0; c < channels && c < 3; ++c) {
+                out[y][x][c] = v;
             }
         }
     }
@@ -264,41 +325,44 @@ Image cannyEdges(Image gray, float lowRatio, float highRatio) {
     return out;
 }
 
-// ------------------ Halftone ------------------
-//
-// Each input pixel becomes a 2x2 block of black/white according to
-// four intensity ranges.
-//
-Image halftone(const Image& grayInput) {
-    Image gray = grayInput;
-    toGrayscale(gray);
+// ---------------- Halftone ----------------
 
-    Image out;
-    out.width  = gray.width * 2;
-    out.height = gray.height * 2;
-    out.channels = gray.channels;
-    out.data.assign(out.width * out.height * out.channels, 0);
+Image applyHalftone(const Image& grayInput,
+                    int width,
+                    int height) {
+    Image gray = grayInput;
+    makeGrayscale(gray, width, height);
+
+    int channels = static_cast<int>(gray[0][0].size());
+
+    int outW = width * 2;
+    int outH = height * 2;
+
+    Image out(outH,
+              std::vector<std::vector<unsigned char>>(
+                  outW,
+                  std::vector<unsigned char>(channels, 0)));
 
     const unsigned char pattern[4][2][2] = {
-        { {0, 0},   {0, 0}   },   // darkest
-        { {0, 0},   {255, 0} },   // one white
-        { {0, 255}, {255, 0} },   // two whites
-        { {0, 255}, {255,255} }   // three whites (brightest)
+        { {0, 0},   {0, 0}   },
+        { {0, 0},   {255, 0} },
+        { {0, 255}, {255, 0} },
+        { {0, 255}, {255,255} }
     };
 
-    for (int y = 0; y < gray.height; ++y) {
-        for (int x = 0; x < gray.width; ++x) {
-            unsigned char intensity = gray.at(x, y, 0);
-            int idx = intensity / 64; // 0..3
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            unsigned char g = gray[y][x][0];
+            int idx = g / 64; // 0..3
 
             for (int dy = 0; dy < 2; ++dy) {
                 for (int dx = 0; dx < 2; ++dx) {
-                    int ox = x * 2 + dx;
-                    int oy = y * 2 + dy;
                     unsigned char v = pattern[idx][dy][dx];
+                    int oy = y * 2 + dy;
+                    int ox = x * 2 + dx;
 
-                    for (int c = 0; c < out.channels && c < 3; ++c) {
-                        out.at(ox, oy, c) = v;
+                    for (int c = 0; c < channels && c < 3; ++c) {
+                        out[oy][ox][c] = v;
                     }
                 }
             }
@@ -308,19 +372,20 @@ Image halftone(const Image& grayInput) {
     return out;
 }
 
-// ------------- Floyd–Steinberg (16 levels) -------------
-//
-// Classic error-diffusion pattern. :contentReference[oaicite:3]{index=3}
-void floydSteinberg16(Image& gray) {
-    toGrayscale(gray);
+// ------------- Floyd–Steinberg (16 gray levels) -------------
 
-    int w = gray.width;
-    int h = gray.height;
+void applyFloydSteinberg16(Image& gray,
+                           int width,
+                           int height) {
+    makeGrayscale(gray, width, height);
 
-    std::vector<float> buffer(w * h, 0.0f);
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            buffer[y * w + x] = gray.at(x, y, 0);
+    int channels = static_cast<int>(gray[0][0].size());
+
+    std::vector<float> buf(width * height, 0.0f);
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            buf[y * width + x] = gray[y][x][0];
         }
     }
 
@@ -329,40 +394,38 @@ void floydSteinberg16(Image& gray) {
     const float c = 5.f / 16.f;
     const float d = 1.f / 16.f;
 
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            int idx = y * w + x;
-            float oldVal = buffer[idx];
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int idx = y * width + x;
+            float oldVal = buf[idx];
 
             int level = static_cast<int>(std::round(oldVal / 255.0f * 15));
             float newVal = (level / 15.0f) * 255.0f;
 
-            buffer[idx] = newVal;
+            buf[idx] = newVal;
             float error = oldVal - newVal;
 
-            if (x + 1 < w)
-                buffer[idx + 1] += error * a;
+            if (x + 1 < width)
+                buf[idx + 1] += error * a;
 
-            if (y + 1 < h) {
+            if (y + 1 < height) {
                 if (x > 0)
-                    buffer[(y + 1) * w + (x - 1)] += error * b;
-
-                buffer[(y + 1) * w + x] += error * c;
-
-                if (x + 1 < w)
-                    buffer[(y + 1) * w + (x + 1)] += error * d;
+                    buf[(y + 1) * width + (x - 1)] += error * b;
+                buf[(y + 1) * width + x] += error * c;
+                if (x + 1 < width)
+                    buf[(y + 1) * width + (x + 1)] += error * d;
             }
         }
     }
 
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            float v = clamp(buffer[y * w + x], 0.0f, 255.0f);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            float v = clamp(buf[y * width + x], 0.0f, 255.0f);
             unsigned char g = static_cast<unsigned char>(v);
 
-            gray.at(x, y, 0) = g;
-            if (gray.channels > 1) gray.at(x, y, 1) = g;
-            if (gray.channels > 2) gray.at(x, y, 2) = g;
+            gray[y][x][0] = g;
+            if (channels > 1) gray[y][x][1] = g;
+            if (channels > 2) gray[y][x][2] = g;
         }
     }
 }

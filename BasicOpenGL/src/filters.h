@@ -6,57 +6,51 @@
 #include <stb/stb_image.h>
 #include <stb/stb_image_write.h>
 
-// A very simple image structure: flat array + dimensions
-struct Image {
-    int width  = 0;
-    int height = 0;
-    int channels = 0;          // usually 3 (RGB) or 4 (RGBA)
-    std::vector<unsigned char> data;
+// 3D image type: [row][col][channel]
+using Image = std::vector<std::vector<std::vector<unsigned char>>>;
 
-    // Access helpers
-    unsigned char& at(int x, int y, int c) {
-        return data[(y * width + x) * channels + c];
-    }
-    unsigned char at(int x, int y, int c) const {
-        return data[(y * width + x) * channels + c];
-    }
-};
+// Load an image from disk into Image (fills width/height/channels)
+Image loadImageTo3D(const std::string& filePath,
+                    int& width,
+                    int& height,
+                    int& channels);
 
-// --------- Load / Save ---------
+// Save an Image as PNG to disk
+void save3DImage(const Image& img,
+                 const std::string& filePath);
 
-// Load PNG (or other stb-supported image) from disk into Image
-Image loadImage(const std::string& filePath);
+// Save one channel (grayscale) as comma-separated integers
+// levels = 2  -> values 0..1 (black/white)
+// levels = 16 -> values 0..15 (16 gray levels)
+void save3DImageAsText(const Image& img,
+                       const std::string& filePath,
+                       int levels);
 
-// Save Image as PNG file
-void saveImage(const Image& img, const std::string& filePath);
-
-// Save first channel of image to a text file:
-//   - grayscaleLevels = 2  -> numbers 0..1 (black/white)
-//   - grayscaleLevels = 16 -> numbers 0..15 (16 gray levels)
-void saveImageAsText(const Image& img,
-                     const std::string& filePath,
-                     int grayscaleLevels);
-
-// --------- Basic operations ---------
+// --------- basic grayscale ---------
 
 // Convert RGB image to grayscale using luminance formula
-// (0.3 R + 0.59 G + 0.11 B)
-void toGrayscale(Image& img);
+void makeGrayscale(Image& img,
+                   int width,
+                   int height);
 
-// --------- Assignment filters ---------
+// --------- Canny edge detection (all stages inside) ---------
 
-// 1. Grayscale (just use toGrayscale + save)
-
-// 2. Canny edge detection (on grayscale image)
-// lowRatio, highRatio in [0,1], e.g. 0.1 and 0.9
-Image cannyEdges(Image gray,
+Image applyCanny(const Image& grayInput,
+                 int width,
+                 int height,
                  float lowRatio,
                  float highRatio);
 
-// 3. Halftone: each pixel -> 2x2 black/white block
-Image halftone(const Image& gray);
+// --------- Halftone (each pixel -> 2x2 block) ---------
 
-// 4. Floyd–Steinberg dithering (16 gray levels) on grayscale
-void floydSteinberg16(Image& gray);
+Image applyHalftone(const Image& grayInput,
+                    int width,
+                    int height);
+
+// --------- Floyd–Steinberg (16 gray levels) ---------
+
+void applyFloydSteinberg16(Image& gray,
+                           int width,
+                           int height);
 
 #endif // FILTERS_H
