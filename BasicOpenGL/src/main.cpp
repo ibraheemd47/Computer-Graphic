@@ -11,8 +11,8 @@ void ApplyFloydSteinbergDither(std::vector<std::vector<std::vector<unsigned char
 
 
 
-std::string filepath_inputImage = "C:\\Users\\ibrah\\OneDrive\\Desktop\\computerGraphics-main\\Lenna.png";
-std::string  filepath_outputImage = "C:\\Users\\ibrah\\OneDrive\\Desktop\\computerGraphics-main\\output_images\\"; 
+std::string filepath_inputImage = "C:/Users/ibrah/Computer-Graphic/BasicOpenGL/Lenna.png";
+std::string  filepath_outputImage = "C:/Users/ibrah/Computer-Graphic/BasicOpenGL/output"; 
 int main() {
     // Filepaths
    
