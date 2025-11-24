@@ -1,6 +1,7 @@
 #include "filters.h"
 
 #include <GLFW/glfw3.h>   // from BasicOpenGL
+#include <filesystem>
 #include <iostream>
 #include <string>
 
@@ -12,12 +13,19 @@ static void drawTexturedQuad(GLuint tex,
                              float xMax, float yMax);
 
 int main() {
-    // adjust these paths for your machine
-    std::string inputPath =
-        "C:/Users/ibrah/Computer-Graphic/BasicOpenGL/Lenna.png";
+    // Run from bin/: input is ../src/Lenna.png, outputs to ../output/
+    std::string inputPath = "../Lenna.png";
+    std::string outputDir = "../output/"; // end with '/'
 
-    std::string outputDir =
-        "C:/Users/ibrah/Computer-Graphic/BasicOpenGL/output/"; // end with '/'
+    // Ensure output directory exists
+    std::filesystem::create_directories(outputDir);
+
+    // Simple existence check to avoid confusing errors later
+    if (!std::filesystem::exists(inputPath)) {
+        std::cerr << "Missing input image at " << inputPath
+                  << " (place Lenna.png in BasicOpenGL/src/)\n";
+        return 1;
+    }
 
     int width = 0, height = 0, channels = 0;
 
