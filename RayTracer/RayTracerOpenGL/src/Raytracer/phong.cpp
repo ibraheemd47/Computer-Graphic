@@ -49,21 +49,26 @@ glm::vec3 Phong::calcColor(Scene &scene, Ray &ray, int level) {
     }
 
     else if (status == 2) {
-        if (level >= MAX_LEVEL) {
-            return glm::vec3(0.0f) ;
-        }
+        if (level >= MAX_LEVEL) return glm::vec3(0.0f);
 
+    const float EPS = 1e-3f;
 
-        glm::vec3 normal = hit.normal;
+    Ray enterRay = calcTransparencyRay(ray, glm::normalize(hit.normal), hit.point);
 
-        Ray refractedRay = calcTransparencyRay(ray, normal, hit.point);
+    Ray insideRay(hit.point + EPS * enterRay.direction, enterRay.direction);
 
-        glm::vec3 exitPoint = hit.point + 0.01f * refractedRay.direction; 
-        Ray exitRay(exitPoint, refractedRay.direction);
-        exitRay.objectId = hit.objectId; 
-        glm::vec3 exitColor = calcColor(scene, exitRay, level + 1);
+    Intersection exitHit = scene.GetHit(insideRay);
+    if (!exitHit.hitObject || exitHit.objectId != hit.objectId)
+        return glm::vec3(0.0f);
 
-        color += exitColor;  
+    glm::vec3 exitPoint = exitHit.point;
+
+    
+    Ray outsideRay = calcTransparencyRay(insideRay, glm::normalize(exitHit.normal), exitPoint);
+
+    Ray finalRay(exitPoint + EPS * outsideRay.direction, outsideRay.direction);
+
+    return calcColor(scene, finalRay, level + 1);
     }
 
     return color;
@@ -216,33 +221,34 @@ Ray Phong::ConstructOutRay(Ray &ray, glm::vec3 normal, glm::vec3 hitPoint) {
 
 
 Ray Phong::calcTransparencyRay(const Ray &ray, const glm::vec3 &normal, const glm::vec3 &hitPosition) {
-    float n1 = 1.0f; 
-    float n2 = 1.5f; 
-    const float epsilon = 1e-4f; 
+    const float n_air = 1.0f;
+    const float n_glass = 1.5f;   
+    const float EPS = 1e-4f;
 
-    glm::vec3 adjustedNormal = normal;
+    glm::vec3 I = glm::normalize(ray.direction);
+    glm::vec3 N = glm::normalize(normal);
 
-    float cosThetaI = glm::dot(-ray.direction, normal);
+    float cosi = glm::clamp(glm::dot(I, N), -1.0f, 1.0f);
 
-    if (cosThetaI < 0) {
-        cosThetaI = -cosThetaI;
-        std::swap(n1, n2);
-        adjustedNormal = -normal; 
+    float etai = n_air;
+    float etat = n_glass;
+
+    if (cosi > 0.0f) {
+        std::swap(etai, etat);
+        N = -N;
     }
 
-    float eta = n1 / n2;
-    float sinThetaT2 = eta * eta * (1.0f - cosThetaI * cosThetaI);
+    cosi = std::abs(cosi);
 
-    if (sinThetaT2 > 1.0f) {
-        glm::vec3 reflectionDirection = glm::reflect(ray.direction, adjustedNormal);
-        glm::vec3 originOffset = hitPosition + epsilon * adjustedNormal;
-        return Ray(originOffset, glm::normalize(reflectionDirection));
+    float eta = etai / etat;
+    float k = 1.0f - eta * eta * (1.0f - cosi * cosi);
+
+    if (k < 0.0f) {
+        glm::vec3 R = glm::normalize(glm::reflect(I, N));
+        return Ray(hitPosition + EPS * R, R);
     }
 
-    float cosThetaT = sqrt(1.0f - sinThetaT2);
-    glm::vec3 refractedDirection = eta * ray.direction + (eta * cosThetaI - cosThetaT) * adjustedNormal;
+    glm::vec3 T = glm::normalize(eta * I + (eta * cosi - std::sqrt(k)) * N);
 
-    glm::vec3 originOffset = hitPosition + epsilon * adjustedNormal;
-
-    return Ray(originOffset, glm::normalize(refractedDirection));
+    return Ray(hitPosition + EPS * T, T);
 }

@@ -40,6 +40,10 @@ static std::string SaveImage(const Image3D& imageArray,
 static Image3D RayTrace(Scene& scene, int width, int height);
 
 static GLuint CreateTextureFromImage(const Image3D& image);
+static void ShowImageWindow(const Image3D& image);
+static GLuint CompileShader(GLenum type, const char* src);
+static GLuint CreateQuadProgram();
+static GLuint CreateQuadVAO(GLuint& outVbo);
 
 static void framebuffer_size_callback(GLFWwindow* window, int fbW, int fbH)
 {
@@ -73,6 +77,8 @@ int main(int argc, char *argv[])
     std::string savedPath = SaveImage(image, uniqueName, filepath_outputImage);
 
     std::cout << "Saved: " << savedPath << "\n";
+
+    ShowImageWindow(image);
 
     return 0;
 
@@ -217,4 +223,149 @@ static GLuint CreateTextureFromImage(const Image3D& image)
 
     glBindTexture(GL_TEXTURE_2D, 0);
     return tex;
+}
+
+static void ShowImageWindow(const Image3D& image)
+{
+    if (!glfwInit()) return;
+    GLFWwindow* window = glfwCreateWindow(WIDTH, HEIGHT, "Raytraced Image", nullptr, nullptr);
+    if (!window) {
+        glfwTerminate();
+        return;
+    }
+    glfwMakeContextCurrent(window);
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return;
+    }
+    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+    GLuint program = CreateQuadProgram();
+    if (!program) {
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return;
+    }
+    GLuint vbo = 0;
+    GLuint vao = CreateQuadVAO(vbo);
+    if (!vao) {
+        glDeleteProgram(program);
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return;
+    }
+    GLuint tex = CreateTextureFromImage(image);
+    while (!glfwWindowShouldClose(window)) {
+        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUseProgram(program);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glBindVertexArray(vao);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+    }
+    glDeleteBuffers(1, &vbo);
+    glDeleteVertexArrays(1, &vao);
+    glDeleteTextures(1, &tex);
+    glDeleteProgram(program);
+    glfwDestroyWindow(window);
+    glfwTerminate();
+}
+
+static GLuint CompileShader(GLenum type, const char* src)
+{
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &src, nullptr);
+    glCompileShader(shader);
+    GLint status = 0;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &status);
+    if (!status) {
+        glDeleteShader(shader);
+        return 0;
+    }
+    return shader;
+}
+
+static GLuint CreateQuadProgram()
+{
+    const char* vs = R"(
+        #version 330 core
+        layout(location = 0) in vec2 aPos;
+        layout(location = 1) in vec2 aUV;
+        out vec2 vUV;
+        void main() {
+            vUV = aUV;
+            gl_Position = vec4(aPos, 0.0, 1.0);
+        }
+    )";
+
+    const char* fs = R"(
+        #version 330 core
+        in vec2 vUV;
+        out vec4 FragColor;
+        uniform sampler2D uTex;
+        void main() {
+            FragColor = texture(uTex, vUV);
+        }
+    )";
+
+    GLuint vert = CompileShader(GL_VERTEX_SHADER, vs);
+    GLuint frag = CompileShader(GL_FRAGMENT_SHADER, fs);
+    if (!vert || !frag) {
+        if (vert) glDeleteShader(vert);
+        if (frag) glDeleteShader(frag);
+        return 0;
+    }
+
+    GLuint program = glCreateProgram();
+    glAttachShader(program, vert);
+    glAttachShader(program, frag);
+    glLinkProgram(program);
+    glDeleteShader(vert);
+    glDeleteShader(frag);
+
+    GLint linked = 0;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        glDeleteProgram(program);
+        return 0;
+    }
+
+    glUseProgram(program);
+    GLint loc = glGetUniformLocation(program, "uTex");
+    if (loc >= 0) glUniform1i(loc, 0);
+    glUseProgram(0);
+    return program;
+}
+
+static GLuint CreateQuadVAO(GLuint& outVbo)
+{
+    const float quad[] = {
+        -1.0f, -1.0f, 0.0f, 0.0f,
+         1.0f, -1.0f, 1.0f, 0.0f,
+        -1.0f,  1.0f, 0.0f, 1.0f,
+         1.0f,  1.0f, 1.0f, 1.0f
+    };
+
+    GLuint vao = 0;
+    glGenVertexArrays(1, &vao);
+    glGenBuffers(1, &outVbo);
+
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, outVbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    return vao;
 }
